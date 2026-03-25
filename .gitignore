@@ -1,0 +1,22 @@
+node_modules
+dist
+dist-electron
+.DS_Store
+Thumbs.db
+*.log
+
+# 本地 npm 配置（含镜像等）；仓库内用 .npmrc.example 作为模板
+.npmrc
+
+# 环境变量与密钥（勿提交真实值）
+.env
+.env.*
+!.env.example
+
+# 证书与签名材料（若放在项目目录）
+*.pem
+*.p12
+*.pfx
+
+.vscode
+.idea

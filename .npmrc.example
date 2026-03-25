@@ -1,0 +1,4 @@
+# 复制为 .npmrc（已加入 .gitignore，仅本机生效）
+# 在中国大陆网络环境下可加速 electron / electron-builder 二进制下载。
+electron_mirror=https://npmmirror.com/mirrors/electron/
+electron_builder_binaries_mirror=https://npmmirror.com/mirrors/electron-builder-binaries/

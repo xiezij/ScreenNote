@@ -1,0 +1,82 @@
+{
+  "name": "ScreenNote",
+  "version": "1.0.0",
+  "description": "屏幕截屏和录屏工具",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -n \"vite,electron\" -c \"cyan,magenta\" \"npm run dev:vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "dev:vite": "vite",
+    "build": "vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:electron": "node scripts/build-electron.js",
+    "preview": "vite preview",
+    "electron": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "vue",
+    "screen-capture",
+    "recording"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-reloader": "^1.2.3",
+    "sharp": "^0.34.5",
+    "to-ico": "^1.1.5",
+    "vite": "^5.0.0",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "vue": "^3.4.0"
+  },
+  "build": {
+    "productName": "屏幕截屏和录屏工具",
+    "appId": "com.screennote.app",
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**"
+    ],
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "signDlls": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "屏幕截屏和录屏工具",
+      "uninstallDisplayName": "屏幕截屏和录屏工具",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
