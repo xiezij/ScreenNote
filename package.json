@@ -1,6 +1,6 @@
 {
   "name": "ScreenNote",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "屏幕截屏和录屏工具",
   "main": "electron/main.js",
   "scripts": {

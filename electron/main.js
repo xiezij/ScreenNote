@@ -20,7 +20,35 @@ const { spawn } = require('child_process');
 function getFfmpegPath() {
   try {
     const p = require('ffmpeg-static');
-    return p && fs.existsSync(p) ? p : null;
+    if (!p) return null;
+
+    const candidates = [];
+    // 打包环境优先使用解包目录，避免 app.asar 路径被 existsSync 误判后导致 spawn ENOENT。
+    if (app.isPackaged) {
+      if (p.includes('app.asar')) {
+        candidates.push(p.replace('app.asar', 'app.asar.unpacked'));
+      }
+      if (process.resourcesPath) {
+        candidates.push(
+          path.join(
+            process.resourcesPath,
+            'app.asar.unpacked',
+            'node_modules',
+            'ffmpeg-static',
+            process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
+          )
+        );
+      }
+      // 仅当 ffmpeg-static 本身已返回非 asar 路径时，才作为兜底候选。
+      if (!p.includes('app.asar')) {
+        candidates.push(p);
+      }
+    } else {
+      candidates.push(p);
+    }
+
+    const resolved = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+    return resolved || null;
   } catch {
     return null;
   }
@@ -540,7 +568,22 @@ ipcMain.handle('get-hotkey-status', () => ({
 
 ipcMain.handle('path-join', (event, dir, fileName) => path.join(dir, fileName));
 
-ipcMain.handle('transcode-webm-to-mp4', async (event, { buffer }) => {
+ipcMain.handle('open-path', async (_event, targetPath) => {
+  try {
+    if (!targetPath) {
+      return { success: false, error: '目录路径为空' };
+    }
+    const err = await shell.openPath(targetPath);
+    if (err) {
+      return { success: false, error: err };
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message || String(error) };
+  }
+});
+
+ipcMain.handle('transcode-webm-to-mp4', async (event, { buffer, recordingQuality }) => {
   const ffmpegPath = getFfmpegPath();
   if (!ffmpegPath) {
     return { success: false, error: '未找到 FFmpeg（请确认已安装 ffmpeg-static）' };
@@ -550,30 +593,55 @@ ipcMain.handle('transcode-webm-to-mp4', async (event, { buffer }) => {
   const outPath = path.join(os.tmpdir(), `cap-rec-${id}.mp4`);
   try {
     fs.writeFileSync(inPath, Buffer.from(buffer));
+    // libx264 + yuv420p 要求宽高为偶数；录屏/区域录屏可能出现奇数尺寸导致退出码 1。
+    const vfEven = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+    // 与前端「录屏画质」一致：MP4 用 CRF 控制体积/观感（此前未传参时恒为默认 CRF，导致高码率 WebM 转出来反而可能更小）
+    const crfByQuality = { high: 18, mid: 23, low: 28 };
+    const crf = crfByQuality[recordingQuality] ?? 23;
+    const preset = recordingQuality === 'high' ? 'medium' : 'veryfast';
+    const args = [
+      '-y',
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      inPath,
+      '-vf',
+      vfEven,
+      '-c:v',
+      'libx264',
+      '-preset',
+      preset,
+      '-crf',
+      String(crf),
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      '-an',
+      outPath
+    ];
     const code = await new Promise((resolve, reject) => {
-      const proc = spawn(
-        ffmpegPath,
-        [
-          '-y',
-          '-i',
-          inPath,
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-pix_fmt',
-          'yuv420p',
-          '-movflags',
-          '+faststart',
-          outPath
-        ],
-        { stdio: 'ignore' }
-      );
+      let stderrBuf = '';
+      const proc = spawn(ffmpegPath, args, {
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+      proc.stderr?.on('data', (chunk) => {
+        stderrBuf += chunk.toString();
+        if (stderrBuf.length > 8000) {
+          stderrBuf = stderrBuf.slice(-8000);
+        }
+      });
       proc.on('error', reject);
-      proc.on('close', (c) => resolve(c));
+      proc.on('close', (c) => resolve({ code: c, stderr: stderrBuf.trim() }));
     });
-    if (code !== 0) {
-      return { success: false, error: `FFmpeg 退出码 ${code}` };
+    if (code.code !== 0) {
+      const tail = code.stderr ? code.stderr.split('\n').filter(Boolean).slice(-4).join(' ') : '';
+      const detail = tail ? ` ${tail}` : '';
+      return {
+        success: false,
+        error: `FFmpeg 退出码 ${code.code}${detail ? `：${detail}` : ''}`
+      };
     }
     if (!fs.existsSync(outPath)) {
       return { success: false, error: '未生成 MP4 文件' };
