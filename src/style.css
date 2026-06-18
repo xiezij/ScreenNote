@@ -4,11 +4,71 @@
   box-sizing: border-box;
 }
 
+:root,
+:root[data-theme='light'] {
+  --bg-app: #e9eef3;
+  --bg-header: rgba(246, 249, 252, 0.78);
+  --bg-panel: #f6f9fc;
+  --bg-panel-elevated: #ffffff;
+  --bg-input: #eef3f8;
+  --bg-video-fallback: #0f172a;
+  --text-primary: #16212f;
+  --text-secondary: #2e4158;
+  --text-muted: #5e748d;
+  --border-soft: rgba(39, 59, 87, 0.17);
+  --accent: #1f6f95;
+  --accent-soft: rgba(31, 111, 149, 0.2);
+  --accent-alt: #86613b;
+  --accent-contrast: #f8fbfd;
+  --danger: #b74250;
+  --shadow-soft: rgba(17, 24, 39, 0.13);
+  --toast-info-bg: rgba(21, 53, 78, 0.95);
+  --toast-info-text: #edf6fb;
+  --toast-success-bg: rgba(20, 83, 45, 0.95);
+  --toast-success-text: #e8faee;
+  --toast-error-bg: rgba(127, 29, 29, 0.95);
+  --toast-error-text: #fee6e6;
+  --scroll-track: rgba(15, 23, 42, 0.08);
+  --scroll-thumb: rgba(54, 95, 120, 0.48);
+  --scroll-thumb-hover: rgba(37, 71, 92, 0.72);
+}
+
+:root[data-theme='dark'] {
+  --bg-app: #101922;
+  --bg-header: rgba(15, 23, 33, 0.78);
+  --bg-panel: #192432;
+  --bg-panel-elevated: #202e3d;
+  --bg-input: #162131;
+  --bg-video-fallback: #02070f;
+  --text-primary: #ebf2f9;
+  --text-secondary: #c8d6e4;
+  --text-muted: #96a9be;
+  --border-soft: rgba(163, 186, 210, 0.25);
+  --accent: #61afd9;
+  --accent-soft: rgba(97, 175, 217, 0.24);
+  --accent-alt: #c9a273;
+  --accent-contrast: #0e1b28;
+  --danger: #e56d79;
+  --shadow-soft: rgba(0, 0, 0, 0.36);
+  --toast-info-bg: rgba(47, 91, 125, 0.95);
+  --toast-info-text: #f2f9ff;
+  --toast-success-bg: rgba(32, 92, 57, 0.95);
+  --toast-success-text: #eafbf0;
+  --toast-error-bg: rgba(137, 52, 52, 0.95);
+  --toast-error-text: #fff0f0;
+  --scroll-track: rgba(8, 14, 22, 0.38);
+  --scroll-thumb: rgba(113, 158, 188, 0.46);
+  --scroll-thumb-hover: rgba(139, 189, 221, 0.72);
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: #333;
+  font-family: 'Segoe UI Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  background: var(--bg-app);
+  color: var(--text-primary);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.01em;
 }
 
 #app {

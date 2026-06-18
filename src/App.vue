@@ -12,12 +12,30 @@
 
     <div class="header">
       <div class="header-top">
-        <h1>屏幕截屏和录屏工具</h1>
-        <div v-if="isElectron && primaryDisplay" class="display-meta inline">
-          <span class="display-meta-text">
-            主显示器 {{ primaryDisplay.width }}×{{ primaryDisplay.height }}，缩放 {{ primaryDisplay.scaleFactor }}×
-          </span>
-          <span v-if="hotkeyHint" class="hotkey-hint-inline">{{ hotkeyHint }}</span>
+        <h1 class="app-title">屏幕截屏和录屏工具</h1>
+        <div class="header-right">
+          <div v-if="isElectron && primaryDisplay" class="display-meta inline">
+            <span class="display-meta-text">
+              主显示器 {{ primaryDisplay.width }}×{{ primaryDisplay.height }}，缩放 {{ primaryDisplay.scaleFactor }}×
+            </span>
+            <span v-if="hotkeyHint" class="hotkey-hint-inline">{{ hotkeyHint }}</span>
+          </div>
+          <div class="header-actions">
+            <label class="theme-switch" for="theme-select">
+              <span class="theme-label">外观</span>
+              <select
+                id="theme-select"
+                v-model="themePreference"
+                class="theme-select"
+                aria-label="选择界面主题"
+                title="切换界面主题"
+              >
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+                <option value="system">跟随系统</option>
+              </select>
+            </label>
+          </div>
         </div>
       </div>
       <p v-if="!isElectron" class="env-hint">
@@ -77,10 +95,13 @@
           <div class="preview-toolbar">
             <h3>预览</h3>
             <label class="toggle-label">
-              <input v-model="regionMode" type="checkbox" @change="onRegionModeChange" />
+              <input v-model="regionMode" type="checkbox" :disabled="isRecording" @change="onRegionModeChange" />
               框选区域
             </label>
           </div>
+          <p v-if="regionMode" class="hint-text region-record-hint">
+            已选区域时，录屏仅录制框内画面；未选区时无法开始录屏。
+          </p>
           <div
             ref="videoContainerRef"
             class="video-container"
@@ -145,7 +166,17 @@
               选择文件夹
             </button>
           </div>
-          <p v-if="defaultSaveDir" class="hint-text path-hint">当前目录：{{ defaultSaveDir }}</p>
+          <p v-if="defaultSaveDir" class="hint-text path-hint">
+            当前目录：
+            <button
+              type="button"
+              class="path-link"
+              :disabled="!isElectron"
+              @click="openDefaultFolder"
+            >
+              {{ defaultSaveDir }}
+            </button>
+          </p>
           <div class="option-row">
             <label class="field-label">录屏保存格式</label>
             <select
@@ -158,6 +189,22 @@
               <option value="mp4">MP4（H.264，录制后转码，依赖 FFmpeg）</option>
             </select>
           </div>
+          <div class="option-row">
+            <label class="field-label">录屏画质</label>
+            <select
+              v-model="recordingQuality"
+              class="field-input"
+              :disabled="isRecording || isTranscoding"
+            >
+              <option value="high">高（约 8 Mbps，更清晰、文件更大）</option>
+              <option value="mid">中（约 2.5 Mbps，默认平衡）</option>
+              <option value="low">低（约 1 Mbps，更省空间）</option>
+            </select>
+          </div>
+          <p class="hint-text mp4-hint">
+            画质「高/中/低」在录制阶段控制 WebM 目标码率（浏览器可能不完全达标）；导出 MP4 时会按相同档位用 H.264
+            CRF（高约 18、中 23、低约 28）再编码，故 MP4 体积与清晰度会随档位变化，且与中间 WebM 大小不一定同向。
+          </p>
           <p v-if="recordingOutputFormat === 'mp4'" class="hint-text mp4-hint">
             MP4 会先录制成 WebM，停止后由内置 FFmpeg 转码，大文件可能需等待数秒。
           </p>
@@ -182,7 +229,7 @@
           </button>
           <button
             type="button"
-            :disabled="!isSourceSelected || isTranscoding"
+            :disabled="!canStartRecording || isTranscoding"
             :class="['btn-primary', { recording: isRecording }]"
             @click="toggleRecording"
           >
@@ -204,7 +251,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useScreenCapture } from './composables/useScreenCapture';
-import { useRecording } from './composables/useRecording';
+import { useRecording, videoBitsPerSecondForQuality } from './composables/useRecording';
 import { useToast } from './composables/useToast';
 import { normalizeVideoRect, videoRectToOverlayStyle } from './utils/videoDisplayMap';
 
@@ -228,7 +275,11 @@ const countdown = ref(0);
 const autoSaveEnabled = ref(false);
 const defaultSaveDir = ref('');
 const recordingOutputFormat = ref('webm_vp9');
+/** 录屏画质：high | mid | low */
+const recordingQuality = ref('mid');
 const isTranscoding = ref(false);
+const themePreference = ref('system');
+const resolvedTheme = ref('light');
 
 const { toasts, push: toast } = useToast();
 const { startCapture, stopCapture, captureFrame } = useScreenCapture();
@@ -236,6 +287,8 @@ const { startRecording, stopRecording } = useRecording();
 
 const LS_DEFAULT_DIR = 'screenshot-default-dir';
 const LS_AUTO_SAVE = 'screenshot-auto-save';
+const LS_THEME_PREFERENCE = 'ui-theme-preference';
+const LS_RECORDING_QUALITY = 'recording-quality';
 
 const isElectron = computed(
   () => typeof window !== 'undefined' && !!window.electronAPI
@@ -245,6 +298,9 @@ const screenSources = computed(() => sources.value.filter((s) => s.kind === 'scr
 const windowSources = computed(() => sources.value.filter((s) => s.kind === 'window'));
 const isSourceSelected = computed(() => !!selectedSourceId.value);
 const canCapture = computed(() => isSourceSelected.value);
+const canStartRecording = computed(
+  () => isSourceSelected.value && (!regionMode.value || !!committedRegion.value)
+);
 
 const mimeForFormat = computed(() => {
   const m = {
@@ -288,14 +344,76 @@ const committedOverlayStyle = computed(() => {
 });
 
 let regionPointerId = null;
+/** 区域录屏：离屏 canvas 的 captureStream 与 rAF 绘制 */
+let regionRecordRaf = null;
+let regionRecordStream = null;
+let regionRecordCanvas = null;
+
 let unlistenHotkey = null;
 let unlistenMenu = null;
+let mediaThemeList = null;
+let unlistenThemeChange = null;
+
+function isValidThemePreference(v) {
+  return v === 'light' || v === 'dark' || v === 'system';
+}
+
+function isValidRecordingQuality(v) {
+  return v === 'high' || v === 'mid' || v === 'low';
+}
+
+function resolveThemeFromSystem() {
+  if (typeof window === 'undefined' || !window.matchMedia) return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyResolvedTheme(theme) {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+}
+
+function syncThemeFromPreference() {
+  const nextTheme = themePreference.value === 'system'
+    ? resolveThemeFromSystem()
+    : themePreference.value;
+  resolvedTheme.value = nextTheme;
+  applyResolvedTheme(nextTheme);
+}
+
+function bindSystemThemeListener() {
+  if (typeof window === 'undefined' || !window.matchMedia) return;
+  if (!mediaThemeList) {
+    mediaThemeList = window.matchMedia('(prefers-color-scheme: dark)');
+  }
+  if (unlistenThemeChange) {
+    unlistenThemeChange();
+    unlistenThemeChange = null;
+  }
+  if (themePreference.value !== 'system') return;
+  const handleChange = () => {
+    syncThemeFromPreference();
+  };
+  if (mediaThemeList.addEventListener) {
+    mediaThemeList.addEventListener('change', handleChange);
+    unlistenThemeChange = () => mediaThemeList.removeEventListener('change', handleChange);
+  } else if (mediaThemeList.addListener) {
+    mediaThemeList.addListener(handleChange);
+    unlistenThemeChange = () => mediaThemeList.removeListener(handleChange);
+  }
+}
 
 onMounted(async () => {
   if (typeof localStorage !== 'undefined') {
     defaultSaveDir.value = localStorage.getItem(LS_DEFAULT_DIR) || '';
     autoSaveEnabled.value = localStorage.getItem(LS_AUTO_SAVE) === '1';
+    const savedTheme = localStorage.getItem(LS_THEME_PREFERENCE) || 'system';
+    themePreference.value = isValidThemePreference(savedTheme) ? savedTheme : 'system';
+    const savedQuality = localStorage.getItem(LS_RECORDING_QUALITY) || 'mid';
+    recordingQuality.value = isValidRecordingQuality(savedQuality) ? savedQuality : 'mid';
   }
+  syncThemeFromPreference();
+  bindSystemThemeListener();
   await refreshSources();
   await loadPrimaryDisplay();
   const api = window.electronAPI;
@@ -330,13 +448,29 @@ onUnmounted(() => {
   if (isRecording.value) {
     stopRecording();
   }
+  stopRegionRecordingResources();
   if (unlistenHotkey) unlistenHotkey();
   if (unlistenMenu) unlistenMenu();
+  if (unlistenThemeChange) unlistenThemeChange();
 });
 
 watch(autoSaveEnabled, (v) => {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(LS_AUTO_SAVE, v ? '1' : '0');
+  }
+});
+
+watch(themePreference, (v) => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(LS_THEME_PREFERENCE, v);
+  }
+  syncThemeFromPreference();
+  bindSystemThemeListener();
+});
+
+watch(recordingQuality, (v) => {
+  if (typeof localStorage !== 'undefined' && isValidRecordingQuality(v)) {
+    localStorage.setItem(LS_RECORDING_QUALITY, v);
   }
 });
 
@@ -485,10 +619,9 @@ async function saveBlobToFile(blob) {
     const res = await api.saveFile(filePath, buffer);
     if (res.success) {
       toast('已保存到默认文件夹', 'success');
-    } else {
-      toast('保存失败：' + (res.error || '未知错误'), 'error', 6000);
+      return;
     }
-    return;
+    toast('自动保存失败，将切换为手动保存：' + (res.error || '未知错误'), 'error', 6000);
   }
 
   const result = await api.showSaveDialog({
@@ -507,6 +640,18 @@ async function saveBlobToFile(blob) {
       toast('保存失败：' + (res.error || '未知错误'), 'error', 6000);
     }
   }
+}
+
+async function openDefaultFolder() {
+  if (!defaultSaveDir.value) return;
+  const api = window.electronAPI;
+  if (!api?.openPath) {
+    toast('当前环境不支持打开文件夹', 'error');
+    return;
+  }
+  const result = await api.openPath(defaultSaveDir.value);
+  if (result?.success) return;
+  toast('打开文件夹失败：' + (result?.error || '未知错误'), 'error', 5000);
 }
 
 async function copyBlobToClipboard(blob) {
@@ -578,6 +723,53 @@ function recordingPresetForCapture() {
   return 'vp9';
 }
 
+function stopRegionRecordingResources() {
+  if (regionRecordRaf != null) {
+    cancelAnimationFrame(regionRecordRaf);
+    regionRecordRaf = null;
+  }
+  if (regionRecordStream) {
+    regionRecordStream.getTracks().forEach((t) => t.stop());
+    regionRecordStream = null;
+  }
+  regionRecordCanvas = null;
+}
+
+/**
+ * 将 video 中 committedRegion（与截屏相同语义）绘制到离屏 canvas，并 captureStream 供 MediaRecorder 使用。
+ */
+function startRegionRecordingStream(video, region) {
+  const { sx, sy, sw, sh } = region;
+  const w = Math.max(2, Math.floor(sw));
+  const h = Math.max(2, Math.floor(sh));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  regionRecordCanvas = canvas;
+  let stream;
+  try {
+    stream = canvas.captureStream(30);
+  } catch (e) {
+    regionRecordCanvas = null;
+    throw e;
+  }
+  regionRecordStream = stream;
+  const tick = () => {
+    if (!regionRecordStream) return;
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      try {
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    regionRecordRaf = requestAnimationFrame(tick);
+  };
+  regionRecordRaf = requestAnimationFrame(tick);
+  return stream;
+}
+
 const toggleRecording = async () => {
   if (isRecording.value) {
     stopRecording();
@@ -592,19 +784,44 @@ const toggleRecording = async () => {
       return;
     }
 
+    if (regionMode.value && !committedRegion.value) {
+      toast('请先在预览区拖选区域，或关闭「框选区域」', 'error');
+      return;
+    }
+
+    stopRegionRecordingResources();
+    let streamToRecord = stream;
+    if (regionMode.value && committedRegion.value) {
+      try {
+        streamToRecord = startRegionRecordingStream(videoElement.value, committedRegion.value);
+      } catch (e) {
+        console.error(e);
+        toast('区域录屏初始化失败：' + (e.message || String(e)), 'error');
+        stopRegionRecordingResources();
+        recordingStatus.value = '';
+        return;
+      }
+    }
+
     try {
       const preset = recordingPresetForCapture();
       await startRecording(
-        stream,
+        streamToRecord,
         async (chunks, meta) => {
+          stopRegionRecordingResources();
           await saveRecording(chunks, meta);
         },
-        { preset }
+        {
+          preset,
+          videoBitsPerSecond: videoBitsPerSecondForQuality(recordingQuality.value)
+        }
       );
       isRecording.value = true;
-      recordingStatus.value = '正在录屏…';
+      recordingStatus.value =
+        regionMode.value && committedRegion.value ? '正在录屏（仅框选区域）…' : '正在录屏…';
     } catch (error) {
       console.error('开始录屏失败:', error);
+      stopRegionRecordingResources();
       toast('开始录屏失败：' + error.message, 'error');
       recordingStatus.value = '';
     }
@@ -638,7 +855,7 @@ const saveRecording = async (chunks, meta) => {
       isTranscoding.value = true;
       recordingStatus.value = '正在转码为 MP4…';
       const webmBuf = Array.from(new Uint8Array(await webmBlob.arrayBuffer()));
-      const trans = await api.transcodeWebmToMp4(webmBuf);
+      const trans = await api.transcodeWebmToMp4(webmBuf, recordingQuality.value);
       isTranscoding.value = false;
       if (!trans.success) {
         toast('转码失败：' + (trans.error || '未知错误'), 'error', 6000);
@@ -697,7 +914,8 @@ const saveRecording = async (chunks, meta) => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--bg-app);
+  color: var(--text-primary);
   position: relative;
 }
 
@@ -718,51 +936,111 @@ const saveRecording = async (chunks, meta) => {
   border-radius: 10px;
   font-size: 14px;
   line-height: 1.45;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 28px var(--shadow-soft);
   pointer-events: auto;
+  border: 1px solid var(--border-soft);
+  backdrop-filter: blur(6px);
 }
 
 .toast-info {
-  background: #1e293b;
-  color: #f1f5f9;
+  background: var(--toast-info-bg);
+  color: var(--toast-info-text);
 }
 
 .toast-success {
-  background: #14532d;
-  color: #dcfce7;
+  background: var(--toast-success-bg);
+  color: var(--toast-success-text);
 }
 
 .toast-error {
-  background: #7f1d1d;
-  color: #fecaca;
+  background: var(--toast-error-bg);
+  color: var(--toast-error-text);
 }
 
 .header {
-  padding: 14px 20px 16px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 14px 20px 14px;
+  background: var(--bg-header);
+  backdrop-filter: blur(14px) saturate(110%);
+  border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
 }
 
 .header-top {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 12px 20px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
 }
 
-.header h1 {
-  color: white;
-  font-size: 22px;
-  font-weight: 600;
+.app-title {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
   margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 85%, transparent);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.theme-switch:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-soft));
+  background: var(--bg-panel-elevated);
+}
+
+.theme-switch:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.theme-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.theme-select {
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  padding: 5px 9px;
+  font-size: 13px;
+  min-width: 98px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.theme-select:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-soft));
+}
+
+.theme-select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .display-meta.inline {
   margin: 0;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-secondary);
   line-height: 1.45;
   max-width: 100%;
 }
@@ -781,6 +1059,15 @@ const saveRecording = async (chunks, meta) => {
     display: block;
     margin-top: 4px;
   }
+
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .theme-switch {
+    margin-left: auto;
+  }
 }
 
 .env-hint {
@@ -788,16 +1075,17 @@ const saveRecording = async (chunks, meta) => {
   padding: 10px 14px;
   font-size: 14px;
   line-height: 1.5;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+  background: var(--bg-panel-elevated);
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid var(--border-soft);
 }
 
 .env-hint code {
   padding: 2px 6px;
   font-size: 13px;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--bg-input);
+  color: var(--text-primary);
   border-radius: 4px;
 }
 
@@ -813,11 +1101,7 @@ const saveRecording = async (chunks, meta) => {
 
 .themed-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(102, 126, 234, 0.65) rgba(15, 23, 42, 0.12);
-}
-
-.main-content.themed-scroll {
-  scrollbar-color: rgba(199, 210, 254, 0.5) rgba(255, 255, 255, 0.12);
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
 }
 
 .themed-scroll::-webkit-scrollbar {
@@ -826,31 +1110,28 @@ const saveRecording = async (chunks, meta) => {
 }
 
 .themed-scroll::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--scroll-track);
   border-radius: 10px;
 }
 
-.main-content.themed-scroll::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.12);
-}
-
 .themed-scroll::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(102, 126, 234, 0.55), rgba(118, 75, 162, 0.55));
+  background: var(--scroll-thumb);
   border-radius: 10px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 .themed-scroll::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(102, 126, 234, 0.85), rgba(118, 75, 162, 0.85));
+  background: var(--scroll-thumb-hover);
   background-clip: padding-box;
 }
 
 .control-panel {
-  background: white;
+  background: var(--bg-panel);
   border-radius: 16px;
   padding: 22px 24px 26px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 16px 40px var(--shadow-soft);
+  border: 1px solid var(--border-soft);
   max-width: 1200px;
   width: 100%;
 }
@@ -911,7 +1192,7 @@ const saveRecording = async (chunks, meta) => {
 
 .mp4-hint {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
   margin-top: -4px;
 }
 
@@ -925,7 +1206,7 @@ const saveRecording = async (chunks, meta) => {
 
 .source-toolbar h3 {
   margin: 0;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .source-group {
@@ -936,7 +1217,7 @@ const saveRecording = async (chunks, meta) => {
   margin: 0 0 10px;
   font-size: 13px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -959,36 +1240,38 @@ const saveRecording = async (chunks, meta) => {
   flex-direction: column;
   align-items: stretch;
   padding: 0;
-  border: 2px solid #e2e8f0;
+  border: 1px solid var(--border-soft);
   border-radius: 12px;
-  background: #f8fafc;
+  background: var(--bg-panel-elevated);
   cursor: pointer;
   text-align: left;
   overflow: hidden;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
 }
 
 .source-card:hover {
-  border-color: #94a3b8;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px var(--shadow-soft);
 }
 
 .source-card.selected {
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.25);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .source-thumb {
   width: 100%;
   aspect-ratio: 3 / 2;
   object-fit: cover;
-  background: #0f172a;
+  background: var(--bg-video-fallback);
 }
 
 .source-name {
   padding: 8px 10px;
   font-size: 12px;
   line-height: 1.35;
-  color: #334155;
+  color: var(--text-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -997,12 +1280,42 @@ const saveRecording = async (chunks, meta) => {
 
 .hint-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0 0 8px;
 }
 
 .path-hint {
   word-break: break-all;
+}
+
+.path-link {
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.path-link:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text-primary) 20%);
+}
+
+.path-link:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.path-link:disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: not-allowed;
 }
 
 .preview-toolbar {
@@ -1015,17 +1328,21 @@ const saveRecording = async (chunks, meta) => {
 
 .preview-toolbar h3 {
   margin: 0;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .preview-area {
   margin-bottom: 20px;
 }
 
+.region-record-hint {
+  margin: -4px 0 12px;
+}
+
 .video-container {
   position: relative;
   width: 100%;
-  background: #000;
+  background: var(--bg-video-fallback);
   border-radius: 8px;
   overflow: hidden;
   aspect-ratio: 16/9;
@@ -1054,15 +1371,15 @@ const saveRecording = async (chunks, meta) => {
 .region-marquee {
   position: absolute;
   z-index: 3;
-  border: 2px solid #38bdf8;
-  background: rgba(56, 189, 248, 0.15);
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   pointer-events: none;
   box-sizing: border-box;
 }
 
 .region-marquee.committed {
-  border-color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
+  border-color: var(--accent-alt);
+  background: color-mix(in srgb, var(--accent-alt) 16%, transparent);
 }
 
 .countdown-overlay {
@@ -1075,17 +1392,17 @@ const saveRecording = async (chunks, meta) => {
   font-size: 72px;
   font-weight: 700;
   color: #fff;
-  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
-  background: rgba(0, 0, 0, 0.35);
+  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.28);
   pointer-events: none;
 }
 
 .capture-options {
   margin-bottom: 18px;
   padding: 16px;
-  background: #f8fafc;
+  background: var(--bg-panel-elevated);
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-soft);
 }
 
 .option-row {
@@ -1112,16 +1429,18 @@ const saveRecording = async (chunks, meta) => {
 .field-label {
   min-width: 88px;
   font-size: 14px;
-  color: #475569;
+  color: var(--text-secondary);
 }
 
 .field-input {
   flex: 1;
   min-width: 160px;
   padding: 8px 10px;
-  border: 2px solid #e2e8f0;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
   font-size: 14px;
+  background: var(--bg-input);
+  color: var(--text-primary);
 }
 
 .field-input.narrow {
@@ -1131,7 +1450,8 @@ const saveRecording = async (chunks, meta) => {
 
 .field-input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .field-range {
@@ -1144,7 +1464,7 @@ const saveRecording = async (chunks, meta) => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #334155;
+  color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
 }
@@ -1172,23 +1492,25 @@ button {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: 1px solid color-mix(in srgb, var(--accent) 80%, #000 20%);
 }
 
 .btn-primary.btn-outline {
   background: transparent;
-  color: #5b21b6;
-  border: 2px solid #7c3aed;
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .btn-primary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.35);
+  transform: translateY(-1px) scale(1.005);
+  box-shadow: 0 10px 22px var(--shadow-soft);
+  filter: brightness(1.03);
 }
 
 .btn-primary.btn-outline:hover:not(:disabled) {
-  background: rgba(124, 58, 237, 0.08);
+  background: var(--accent-soft);
 }
 
 .btn-primary:disabled {
@@ -1199,18 +1521,20 @@ button {
 }
 
 .btn-primary.recording {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  background: var(--danger);
   animation: pulse 2s infinite;
 }
 
 .btn-secondary {
-  background: #f1f5f9;
-  color: #334155;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-soft);
+  transition: border-color 0.16s ease, background 0.16s ease;
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #e2e8f0;
+  background: var(--bg-input);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-soft));
 }
 
 .btn-small {
@@ -1224,19 +1548,21 @@ button {
   align-items: center;
   gap: 10px;
   padding: 10px;
-  background: #f5f5f5;
+  background: var(--bg-panel-elevated);
   border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  color: var(--text-secondary);
 }
 
 .status-indicator {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #ccc;
+  background: var(--text-muted);
 }
 
 .status-indicator.active {
-  background: #f5576c;
+  background: var(--danger);
   animation: blink 1s infinite;
 }
 

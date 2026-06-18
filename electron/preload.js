@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu-action', handler);
     return () => ipcRenderer.removeListener('menu-action', handler);
   },
+  openPath: (targetPath) => ipcRenderer.invoke('open-path', targetPath),
   pathJoin: (dir, fileName) => ipcRenderer.invoke('path-join', dir, fileName),
-  transcodeWebmToMp4: (buffer) => ipcRenderer.invoke('transcode-webm-to-mp4', { buffer })
+  transcodeWebmToMp4: (buffer, recordingQuality) =>
+    ipcRenderer.invoke('transcode-webm-to-mp4', { buffer, recordingQuality })
 });
